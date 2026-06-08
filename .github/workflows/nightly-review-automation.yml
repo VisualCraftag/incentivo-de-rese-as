@@ -1,0 +1,38 @@
+name: Nightly Review Automation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+  run-review-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run review automation
+        run: npm run automation:reviews
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          APIFY_TASK_ID: ${{ secrets.APIFY_TASK_ID }}
+          APIFY_DATASET_LIMIT: ${{ secrets.APIFY_DATASET_LIMIT }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
+          RESEND_REPLY_TO: ${{ secrets.RESEND_REPLY_TO }}
+          RESEND_TO_OVERRIDE: ${{ secrets.RESEND_TO_OVERRIDE }}
+          RESTAURANT_NAME: ${{ secrets.RESTAURANT_NAME }}
+          WHATSAPP_URL: ${{ secrets.WHATSAPP_URL }}

@@ -1,0 +1,590 @@
+import { createClient } from '@supabase/supabase-js'
+import { deliverSubmissionEmail } from './email-delivery.mjs'
+import { generateCouponCode } from './email-workflow.mjs'
+
+const APIFY_API_BASE = 'https://api.apify.com/v2'
+const RESEND_API_BASE = 'https://api.resend.com'
+const COUPON_PREFIX = 'MC'
+const PENDING_EMAIL_STATUSES = [
+  'matched_positive',
+  'matched_low_rating',
+  'not_found',
+]
+
+function getRequiredEnv(name) {
+  const value = process.env[name]
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`)
+  }
+
+  return value
+}
+
+function getSupabaseUrl() {
+  return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+}
+
+function getOptionalEnv(name) {
+  return process.env[name]
+}
+
+export function normalizeReviewIdentity(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function extractReviewUser(item) {
+  return item?.name || item?.user || item?.reviewerName || null
+}
+
+function getSupabaseAdmin() {
+  const url = getSupabaseUrl()
+
+  if (!url) {
+    throw new Error(
+      'Missing required environment variable: SUPABASE_URL or VITE_SUPABASE_URL',
+    )
+  }
+
+  const key = getRequiredEnv('SUPABASE_SERVICE_ROLE_KEY')
+
+  return createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  })
+}
+
+function getEmailConfig() {
+  const apiKey = getOptionalEnv('RESEND_API_KEY')
+
+  if (!apiKey) {
+    return null
+  }
+
+  return {
+    apiKey,
+    fromEmail:
+      getOptionalEnv('RESEND_FROM_EMAIL') ||
+      "McDonald's <onboarding@resend.dev>",
+    replyTo: getOptionalEnv('RESEND_REPLY_TO') || null,
+    recipientOverride: getOptionalEnv('RESEND_TO_OVERRIDE') || null,
+    restaurantName: getOptionalEnv('RESTAURANT_NAME') || "McDonald's",
+    whatsappUrl: getOptionalEnv('WHATSAPP_URL') || '',
+  }
+}
+
+async function createRunRecord(supabase) {
+  const { data, error } = await supabase
+    .from('review_check_runs')
+    .insert({
+      source_type: 'apify',
+      source_reference: process.env.APIFY_TASK_ID,
+      status: 'running',
+      notes: 'Nightly review check started.',
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    throw new Error(`Could not create review_check_runs record: ${error.message}`)
+  }
+
+  return data.id
+}
+
+async function finishRunRecord(supabase, runId, payload) {
+  const { error } = await supabase
+    .from('review_check_runs')
+    .update({
+      ...payload,
+      finished_at: new Date().toISOString(),
+    })
+    .eq('id', runId)
+
+  if (error) {
+    throw new Error(`Could not finish review_check_runs record: ${error.message}`)
+  }
+}
+
+async function fetchPendingSubmissions(supabase) {
+  const { data, error } = await supabase
+    .from('review_submissions')
+    .select('id, google_maps_name, email, status')
+    .eq('status', 'pending_review_check')
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    throw new Error(`Could not fetch pending submissions: ${error.message}`)
+  }
+
+  return data || []
+}
+
+async function fetchPendingEmailSubmissions(supabase) {
+  const { data, error } = await supabase
+    .from('review_submissions')
+    .select('id, google_maps_name, email, status, coupon_id')
+    .in('status', PENDING_EMAIL_STATUSES)
+    .order('review_checked_at', { ascending: true })
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    throw new Error(`Could not fetch pending email submissions: ${error.message}`)
+  }
+
+  return data || []
+}
+
+export async function runApifySourceAndFetchItems() {
+  const token = getRequiredEnv('APIFY_TOKEN')
+  const taskId = getRequiredEnv('APIFY_TASK_ID')
+  const datasetLimit = process.env.APIFY_DATASET_LIMIT || '200'
+
+  const endpoint = `${APIFY_API_BASE}/actor-tasks/${taskId}/run-sync-get-dataset-items?token=${token}&clean=true`
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      maxItems: Number(datasetLimit),
+    }),
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`Apify request failed with ${response.status}: ${body}`)
+  }
+
+  return response.json()
+}
+
+function buildReviewIndex(items) {
+  const reviewIndex = new Map()
+
+  for (const item of items) {
+    const reviewUser = extractReviewUser(item)
+    const normalized = normalizeReviewIdentity(reviewUser)
+
+    if (!normalized || reviewIndex.has(normalized)) {
+      continue
+    }
+
+    reviewIndex.set(normalized, item)
+  }
+
+  return reviewIndex
+}
+
+function classifyMatch(item) {
+  const stars = typeof item?.stars === 'number' ? item.stars : item?.rating
+
+  if (typeof stars === 'number' && stars <= 3) {
+    return 'matched_low_rating'
+  }
+
+  return 'matched_positive'
+}
+
+async function findCouponById(supabase, couponId) {
+  const { data, error } = await supabase
+    .from('coupons')
+    .select('id, code')
+    .eq('id', couponId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Could not fetch coupon by id: ${error.message}`)
+  }
+
+  return data
+}
+
+async function findCouponBySubmissionId(supabase, submissionId) {
+  const { data, error } = await supabase
+    .from('coupons')
+    .select('id, code')
+    .eq('submission_id', submissionId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Could not fetch coupon by submission: ${error.message}`)
+  }
+
+  return data
+}
+
+async function createCouponForSubmission(
+  supabase,
+  { submissionId, existingCouponId = null },
+) {
+  if (existingCouponId) {
+    const existingById = await findCouponById(supabase, existingCouponId)
+
+    if (existingById) {
+      return existingById
+    }
+  }
+
+  const existingBySubmission = await findCouponBySubmissionId(supabase, submissionId)
+
+  if (existingBySubmission) {
+    return existingBySubmission
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateCouponCode()
+    const { data, error } = await supabase
+      .from('coupons')
+      .insert({
+        submission_id: submissionId,
+        code,
+        prefix: COUPON_PREFIX,
+        status: 'generated',
+      })
+      .select('id, code')
+      .single()
+
+    if (!error) {
+      return data
+    }
+
+    if (error.code === '23505') {
+      const concurrentCoupon = await findCouponBySubmissionId(supabase, submissionId)
+
+      if (concurrentCoupon) {
+        return concurrentCoupon
+      }
+
+      continue
+    }
+
+    throw new Error(`Could not create coupon: ${error.message}`)
+  }
+
+  throw new Error('Could not generate a unique coupon code after 5 attempts')
+}
+
+async function createEmailEvent(supabase, { submissionId, type, recipientEmail }) {
+  const { data, error } = await supabase
+    .from('email_events')
+    .insert({
+      submission_id: submissionId,
+      type,
+      recipient_email: recipientEmail,
+      status: 'queued',
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    throw new Error(`Could not create email event: ${error.message}`)
+  }
+
+  return data
+}
+
+async function markEmailEventSent(supabase, { emailEventId, providerMessageId }) {
+  const { error } = await supabase
+    .from('email_events')
+    .update({
+      status: 'sent',
+      provider_message_id: providerMessageId,
+      error_message: null,
+      sent_at: new Date().toISOString(),
+    })
+    .eq('id', emailEventId)
+
+  if (error) {
+    throw new Error(`Could not mark email event as sent: ${error.message}`)
+  }
+}
+
+async function markEmailEventFailed(supabase, { emailEventId, errorMessage }) {
+  const { error } = await supabase
+    .from('email_events')
+    .update({
+      status: 'failed',
+      error_message: errorMessage,
+    })
+    .eq('id', emailEventId)
+
+  if (error) {
+    throw new Error(`Could not mark email event as failed: ${error.message}`)
+  }
+}
+
+async function markDeliveryComplete(
+  supabase,
+  { submissionId, submissionStatus, couponId },
+) {
+  if (couponId) {
+    const { error: couponError } = await supabase
+      .from('coupons')
+      .update({
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+      })
+      .eq('id', couponId)
+
+    if (couponError) {
+      throw new Error(`Could not update coupon as sent: ${couponError.message}`)
+    }
+  }
+
+  const payload = {
+    status: submissionStatus,
+  }
+
+  if (couponId) {
+    payload.coupon_id = couponId
+  }
+
+  const { error: submissionError } = await supabase
+    .from('review_submissions')
+    .update(payload)
+    .eq('id', submissionId)
+
+  if (submissionError) {
+    throw new Error(
+      `Could not update submission after email delivery: ${submissionError.message}`,
+    )
+  }
+}
+
+async function sendResendEmail(apiKey, payload) {
+  const body = {
+    from: payload.from,
+    to: [payload.to],
+    subject: payload.subject,
+    html: payload.html,
+    text: payload.text,
+    tags: [
+      {
+        name: 'workflow',
+        value: 'review-incentive',
+      },
+    ],
+  }
+
+  if (payload.replyTo) {
+    body.reply_to = [payload.replyTo]
+  }
+
+  const response = await fetch(`${RESEND_API_BASE}/emails`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const bodyText = await response.text()
+    throw new Error(`Resend request failed with ${response.status}: ${bodyText}`)
+  }
+
+  return response.json()
+}
+
+async function persistMatchResult(supabase, runId, submission, reviewItem) {
+  const reviewUser = extractReviewUser(reviewItem)
+  const status = classifyMatch(reviewItem)
+  const stars =
+    typeof reviewItem?.stars === 'number' ? reviewItem.stars : reviewItem?.rating
+
+  const { data: matchedReview, error: matchedReviewError } = await supabase
+    .from('matched_reviews')
+    .insert({
+      submission_id: submission.id,
+      run_id: runId,
+      review_user: reviewUser,
+      review_text: reviewItem?.text || reviewItem?.textTranslated || null,
+      rating: typeof stars === 'number' ? stars : null,
+      review_date: reviewItem?.publishedAtDate || null,
+      external_review_key: reviewItem?.reviewId || null,
+      match_confidence: 1,
+    })
+    .select('id')
+    .single()
+
+  if (matchedReviewError) {
+    throw new Error(`Could not insert matched review: ${matchedReviewError.message}`)
+  }
+
+  const { error: submissionError } = await supabase
+    .from('review_submissions')
+    .update({
+      status,
+      review_checked_at: new Date().toISOString(),
+      matched_review_id: matchedReview.id,
+    })
+    .eq('id', submission.id)
+
+  if (submissionError) {
+    throw new Error(`Could not update submission after match: ${submissionError.message}`)
+  }
+
+  return status
+}
+
+async function persistNotFoundResult(supabase, submission) {
+  const { error } = await supabase
+    .from('review_submissions')
+    .update({
+      status: 'not_found',
+      review_checked_at: new Date().toISOString(),
+    })
+    .eq('id', submission.id)
+
+  if (error) {
+    throw new Error(`Could not update submission as not_found: ${error.message}`)
+  }
+}
+
+export async function processPendingEmails(supabase, emailConfig = getEmailConfig()) {
+  if (!emailConfig) {
+    return {
+      enabled: false,
+      attempted: 0,
+      sent: 0,
+      couponEmailsSent: 0,
+      followupEmailsSent: 0,
+      failed: 0,
+    }
+  }
+
+  if (!emailConfig.whatsappUrl) {
+    throw new Error('Missing required environment variable: WHATSAPP_URL')
+  }
+
+  const pendingSubmissions = await fetchPendingEmailSubmissions(supabase)
+  const summary = {
+    enabled: true,
+    attempted: pendingSubmissions.length,
+    sent: 0,
+    couponEmailsSent: 0,
+    followupEmailsSent: 0,
+    failed: 0,
+  }
+
+  for (const submission of pendingSubmissions) {
+    try {
+      const result = await deliverSubmissionEmail({
+        submission,
+        sendEmail: (payload) => sendResendEmail(emailConfig.apiKey, payload),
+        createCoupon: (payload) => createCouponForSubmission(supabase, payload),
+        createEmailEvent: (payload) => createEmailEvent(supabase, payload),
+        markEmailEventSent: (payload) => markEmailEventSent(supabase, payload),
+        markEmailEventFailed: (payload) => markEmailEventFailed(supabase, payload),
+        markDeliveryComplete: (payload) => markDeliveryComplete(supabase, payload),
+        fromEmail: emailConfig.fromEmail,
+        replyTo: emailConfig.replyTo,
+        restaurantName: emailConfig.restaurantName,
+        whatsappUrl: emailConfig.whatsappUrl,
+        recipientOverride: emailConfig.recipientOverride,
+      })
+
+      summary.sent += 1
+
+      if (result.submissionStatus === 'coupon_sent') {
+        summary.couponEmailsSent += 1
+      } else {
+        summary.followupEmailsSent += 1
+      }
+    } catch (error) {
+      summary.failed += 1
+      console.error(
+        `Email delivery failed for submission ${submission.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+
+  return summary
+}
+
+export async function runWorkflow() {
+  const supabase = getSupabaseAdmin()
+  const runId = await createRunRecord(supabase)
+
+  try {
+    const [items, pendingSubmissions] = await Promise.all([
+      runApifySourceAndFetchItems(),
+      fetchPendingSubmissions(supabase),
+    ])
+
+    const reviewIndex = buildReviewIndex(items)
+    let matchedPositive = 0
+    let matchedLowRating = 0
+    let notFound = 0
+
+    for (const submission of pendingSubmissions) {
+      const normalizedName = normalizeReviewIdentity(submission.google_maps_name)
+      const matchingReview = reviewIndex.get(normalizedName)
+
+      if (!matchingReview) {
+        await persistNotFoundResult(supabase, submission)
+        notFound += 1
+        continue
+      }
+
+      const status = await persistMatchResult(
+        supabase,
+        runId,
+        submission,
+        matchingReview,
+      )
+
+      if (status === 'matched_low_rating') {
+        matchedLowRating += 1
+      } else {
+        matchedPositive += 1
+      }
+    }
+
+    await finishRunRecord(supabase, runId, {
+      status: 'completed',
+      notes: `Processed ${pendingSubmissions.length} submissions from ${items.length} scraped reviews.`,
+    })
+
+    const emailSummary = await processPendingEmails(supabase)
+
+    return {
+      ok: true,
+      runId,
+      fetchedItems: items.length,
+      processedSubmissions: pendingSubmissions.length,
+      matchedPositive,
+      matchedLowRating,
+      notFound,
+      emails: emailSummary,
+    }
+  } catch (error) {
+    await finishRunRecord(supabase, runId, {
+      status: 'failed',
+      notes: error instanceof Error ? error.message : 'Unknown workflow failure.',
+    })
+    throw error
+  }
+}
+
+export async function main() {
+  const result = await runWorkflow()
+  console.log(JSON.stringify(result, null, 2))
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})
