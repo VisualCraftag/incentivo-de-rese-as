@@ -26,6 +26,42 @@ function writeLocalLock(payload) {
   }
 }
 
+function openReviewTab() {
+  try {
+    const reviewTab = window.open('', '_blank')
+
+    if (reviewTab) {
+      reviewTab.opener = null
+    }
+
+    return reviewTab
+  } catch {
+    return null
+  }
+}
+
+function closeReviewTab(reviewTab) {
+  try {
+    reviewTab?.close()
+  } catch {
+    // Ignore popup close failures.
+  }
+}
+
+function navigateReviewTab(reviewTab) {
+  if (typeof reviewTab?.location?.replace === 'function') {
+    reviewTab.location.replace(REVIEW_URL)
+    return
+  }
+
+  if (reviewTab?.location) {
+    reviewTab.location.href = REVIEW_URL
+    return
+  }
+
+  window.open(REVIEW_URL, '_blank', 'noopener,noreferrer')
+}
+
 export default function App() {
   const [formData, setFormData] = useState(INITIAL_FORM)
   const [errors, setErrors] = useState({})
@@ -82,6 +118,7 @@ export default function App() {
 
     setIsSubmitting(true)
     setSubmissionError('')
+    const reviewTab = openReviewTab()
 
     const result = await createReviewSubmission(formData)
 
@@ -92,12 +129,13 @@ export default function App() {
         email: formData.email.trim().toLowerCase(),
         createdAt: new Date().toISOString(),
       })
-      window.open(REVIEW_URL, '_blank', 'noopener,noreferrer')
+      navigateReviewTab(reviewTab)
       setIsSubmitted(true)
       return
     }
 
     if (result.code === 'duplicate_email') {
+      closeReviewTab(reviewTab)
       writeLocalLock({
         email: formData.email.trim().toLowerCase(),
         createdAt: new Date().toISOString(),
@@ -107,6 +145,7 @@ export default function App() {
       return
     }
 
+    closeReviewTab(reviewTab)
     setSubmissionError(result.message || 'No pudimos guardar tu solicitud.')
   }
 
