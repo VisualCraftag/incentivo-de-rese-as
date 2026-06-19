@@ -70,11 +70,15 @@ create table if not exists public.coupons (
   status text not null default 'generated',
   generated_at timestamptz not null default now(),
   sent_at timestamptz null,
+  redeemed_at timestamptz null,
   created_at timestamptz not null default now(),
   constraint coupons_status_check check (
     status in ('generated', 'sent', 'redeemed', 'void')
   )
 );
+
+alter table if exists public.coupons
+add column if not exists redeemed_at timestamptz null;
 
 create table if not exists public.email_events (
   id uuid primary key default gen_random_uuid(),

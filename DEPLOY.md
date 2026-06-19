@@ -37,6 +37,7 @@ After deploy:
    - the form inserts into `review_submissions`
    - the page stays on the thank-you state
    - the review link opens the exact Google Maps review URL
+4. Open `/admin` on the same deploy and confirm the admin login renders instead of a 404.
 
 ## 2. Resend sender verification
 
@@ -83,8 +84,27 @@ They belong in your automation runtime, ideally Supabase Edge Function secrets:
 - `RESEND_TO_OVERRIDE` optional for tests only
 - `RESTAURANT_NAME`
 - `WHATSAPP_URL`
+- `ADMIN_PANEL_USERNAME`
+- `ADMIN_PANEL_PASSWORD`
+- `ADMIN_PANEL_SESSION_SECRET`
 
-## 4. Supabase cron plan
+## 4. Admin panel deployment notes
+
+The `/admin` screen lives in the same Vercel frontend, but the secure coupon actions run from the Supabase Edge Function `admin-coupons`.
+
+Required setup:
+
+1. Deploy `supabase/functions/admin-coupons`.
+2. Ensure `supabase/config.toml` is present so `verify_jwt = false` is applied for that function.
+3. Add the three `ADMIN_PANEL_...` secrets in Supabase Edge Function secrets.
+4. Run the updated `supabase/schema.sql` so `coupons.redeemed_at` exists.
+5. Test the flow:
+   - login with the fixed admin credentials
+   - search an existing coupon
+   - mark it as redeemed
+   - confirm `status = redeemed` and `redeemed_at` is populated in Supabase
+
+## 5. Supabase cron plan
 
 The intended production split is:
 

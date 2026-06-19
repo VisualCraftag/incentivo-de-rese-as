@@ -164,6 +164,12 @@ h1 {
   font-size: 0.9rem;
 }
 
+.form-success {
+  color: #17643b;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
 .maps-button {
   margin-top: 6px;
   width: 100%;
@@ -225,6 +231,190 @@ h1 {
   min-height: 320px;
 }
 
+.admin-shell {
+  background:
+    radial-gradient(circle at top left, rgba(255, 194, 18, 0.26), transparent 28%),
+    linear-gradient(180deg, #f6f0df 0%, #ece7db 100%);
+}
+
+.admin-card {
+  width: min(100%, 720px);
+}
+
+.panel-kicker {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: #7a5d12;
+  font-size: 0.84rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.panel-title {
+  position: relative;
+  z-index: 1;
+  margin: 12px 0 0;
+  font-size: clamp(2.2rem, 5vw, 3.7rem);
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+}
+
+.admin-copy {
+  max-width: 34rem;
+}
+
+.admin-form {
+  max-width: 420px;
+}
+
+.admin-panel-card {
+  padding-bottom: 34px;
+}
+
+.admin-panel-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-search-row {
+  position: relative;
+  z-index: 1;
+  margin-top: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.admin-code-field {
+  margin: 0;
+}
+
+.admin-primary-button {
+  width: auto;
+  min-width: 168px;
+  margin-top: 0;
+}
+
+.admin-secondary-button {
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-main);
+  padding: 12px 18px;
+  border-radius: 999px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+
+.admin-secondary-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(24, 24, 27, 0.18);
+  background: #fff;
+}
+
+.coupon-result-card {
+  position: relative;
+  z-index: 1;
+  margin-top: 24px;
+  padding: 22px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(24, 24, 27, 0.08);
+  box-shadow: 0 18px 34px rgba(33, 37, 41, 0.08);
+}
+
+.coupon-result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.coupon-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.coupon-code {
+  margin: 8px 0 0;
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  line-height: 1;
+  letter-spacing: -0.05em;
+  font-weight: 800;
+}
+
+.coupon-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 194, 18, 0.14);
+  color: #8a6100;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.coupon-status.is-sent {
+  background: rgba(26, 115, 232, 0.12);
+  color: #0f58b8;
+}
+
+.coupon-status.is-redeemed {
+  background: rgba(23, 100, 59, 0.14);
+  color: #17643b;
+}
+
+.coupon-status.is-void {
+  background: rgba(219, 68, 55, 0.12);
+  color: #b2382f;
+}
+
+.coupon-grid {
+  margin: 22px 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.coupon-grid div {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(243, 242, 239, 0.82);
+}
+
+.coupon-grid dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.coupon-grid dd {
+  margin: 8px 0 0;
+  color: var(--text-main);
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.redeem-button {
+  margin-top: 22px;
+}
+
 @media (max-width: 640px) {
   .page-shell {
     padding: 16px;
@@ -241,5 +431,21 @@ h1 {
 
   h1 {
     font-size: 2.55rem;
+  }
+
+  .admin-panel-header,
+  .coupon-result-header,
+  .admin-search-row {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .admin-secondary-button,
+  .admin-primary-button {
+    width: 100%;
+  }
+
+  .coupon-grid {
+    grid-template-columns: 1fr;
   }
 }

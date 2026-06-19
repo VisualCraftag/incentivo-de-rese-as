@@ -2,18 +2,27 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import App from './App'
 import { createReviewSubmission } from './lib/submissions'
+import { loginAdmin, lookupCoupon, redeemCoupon } from './lib/admin'
 
 vi.mock('./lib/submissions', () => ({
   createReviewSubmission: vi.fn(),
+}))
+
+vi.mock('./lib/admin', () => ({
+  loginAdmin: vi.fn(),
+  lookupCoupon: vi.fn(),
+  redeemCoupon: vi.fn(),
 }))
 
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    window.sessionStorage.clear()
+    window.history.pushState({}, '', '/')
   })
 
-  test('shows the restaurant name, logo, three form fields, and submit button', () => {
+  test('shows the restaurant name, logo, two form fields, and submit button', () => {
     render(<App />)
 
     expect(
@@ -150,5 +159,140 @@ describe('App', () => {
     expect(reviewTab.close).toHaveBeenCalled()
 
     openSpy.mockRestore()
+  })
+
+  test('shows the admin login screen on /admin', () => {
+    window.history.pushState({}, '', '/admin')
+
+    render(<App />)
+
+    expect(screen.getByRole('heading', { name: /panel de cupones/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/usuario/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/contrasena/i)).toBeInTheDocument()
+  })
+
+  test('logs into the admin panel and stores the session token', async () => {
+    window.history.pushState({}, '', '/admin')
+    loginAdmin.mockResolvedValue({
+      ok: true,
+      token: 'admin-session-token',
+      expiresAt: '2026-06-18T23:00:00.000Z',
+    })
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/usuario/i), {
+      target: { value: 'admin' },
+    })
+    fireEvent.change(screen.getByLabelText(/contrasena/i), {
+      target: { value: 'secret' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /ingresar/i }))
+
+    await waitFor(() => {
+      expect(loginAdmin).toHaveBeenCalledWith({
+        username: 'admin',
+        password: 'secret',
+      })
+    })
+
+    expect(window.sessionStorage.getItem('reviewAdminSession')).toContain(
+      'admin-session-token',
+    )
+    expect(screen.getByLabelText(/codigo de cupon/i)).toBeInTheDocument()
+  })
+
+  test('shows an admin login error when the credentials are invalid', async () => {
+    window.history.pushState({}, '', '/admin')
+    loginAdmin.mockResolvedValue({
+      ok: false,
+      code: 'invalid_credentials',
+      message: 'Credenciales invalidas.',
+    })
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/usuario/i), {
+      target: { value: 'admin' },
+    })
+    fireEvent.change(screen.getByLabelText(/contrasena/i), {
+      target: { value: 'bad-secret' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /ingresar/i }))
+
+    expect(await screen.findByText(/credenciales invalidas/i)).toBeInTheDocument()
+  })
+
+  test('looks up and redeems a coupon from the admin panel', async () => {
+    window.history.pushState({}, '', '/admin')
+    window.sessionStorage.setItem(
+      'reviewAdminSession',
+      JSON.stringify({
+        token: 'saved-token',
+        expiresAt: '2099-06-18T23:00:00.000Z',
+      }),
+    )
+
+    lookupCoupon.mockResolvedValue({
+      ok: true,
+      coupon: {
+        code: 'MCABC123',
+        status: 'sent',
+        generatedAt: '2026-06-18T12:00:00.000Z',
+        redeemedAt: null,
+        sentAt: '2026-06-18T12:30:00.000Z',
+        submission: {
+          googleMapsName: 'Lucia Colombini',
+          email: 'lucia@example.com',
+        },
+      },
+    })
+    redeemCoupon.mockResolvedValue({
+      ok: true,
+      coupon: {
+        code: 'MCABC123',
+        status: 'redeemed',
+        generatedAt: '2026-06-18T12:00:00.000Z',
+        redeemedAt: '2026-06-18T13:00:00.000Z',
+        sentAt: '2026-06-18T12:30:00.000Z',
+        submission: {
+          googleMapsName: 'Lucia Colombini',
+          email: 'lucia@example.com',
+        },
+      },
+    })
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/codigo de cupon/i), {
+      target: { value: 'mcabc123' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /buscar/i }))
+
+    await waitFor(() => {
+      expect(lookupCoupon).toHaveBeenCalledWith({
+        token: 'saved-token',
+        code: 'mcabc123',
+      })
+    })
+
+    expect(await screen.findByText(/lucia colombini/i)).toBeInTheDocument()
+    expect(screen.getByText(/mcabc123/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /marcar como canjeado/i }))
+
+    await waitFor(() => {
+      expect(redeemCoupon).toHaveBeenCalledWith({
+        token: 'saved-token',
+        code: 'MCABC123',
+      })
+    })
+
+    expect(
+      await screen.findByText(/cupon marcado como canjeado/i),
+    ).toBeInTheDocument()
   })
 })

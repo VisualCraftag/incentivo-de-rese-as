@@ -1,0 +1,2 @@
+[functions.admin-coupons]
+verify_jwt = false
